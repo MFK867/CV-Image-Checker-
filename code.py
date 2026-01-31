@@ -3,8 +3,6 @@ import numpy as np
 from PIL import Image
 import io
 from datetime import datetime
-import time
-import threading
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -34,8 +32,9 @@ st.markdown("""
     .req-success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border-color: #10b981; transform: scale(1.05); box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3); }
     .status-bar { padding: 1.5rem; border-radius: 1rem; text-align: center; font-size: 1.25rem; font-weight: 600; margin: 1rem 0; transition: all 0.3s ease; }
     .status-waiting { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; border: 2px solid #f59e0b; }
-    .status-capture { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color: #1e40af; border: 2px solid #3b82f6; }
-    .stButton>button { width: 100%; height: 3.5rem; font-weight: 600; font-size: 1.2rem; border-radius: 0.75rem; }
+    .status-success { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; border: 2px solid #10b981; }
+    .capture-btn { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; font-weight: 600; }
+    .camera-container { border: 2px solid #e5e7eb; border-radius: 1rem; padding: 1rem; background: #f9fafb; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,13 +48,9 @@ if 'init' not in st.session_state:
         'init': True,
         'captured_image': None,
         'validation_result': None,
-        'auto_capture_frame': None,
-        'camera_running': False,
-        'last_validation': None,
-        'valid_start_time': None,
         'models_ready': False,
         'rembg_ready': False,
-        'fallback_mode': False
+        'show_camera': False
     })
 
 st.markdown('<h1 class="main-header">The University of Faisalabad</h1>', unsafe_allow_html=True)
@@ -333,20 +328,11 @@ if not st.session_state.models_ready:
         
         st.success(f"✅ Loaded: {detector_name}")
 
-# WEBRTC IMPORTS - Only import when needed
-if st.session_state.models_ready and st.session_state.auto_capture_frame is None:
-    try:
-        from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, RTCConfiguration
-        WEBRTC_AVAILABLE = True
-    except ImportError:
-        WEBRTC_AVAILABLE = False
-        st.error("⚠️ streamlit-webrtc not installed. Run: pip install streamlit-webrtc")
-
 if st.session_state.models_ready:
     validator = st.session_state.validator
     
-    # Requirements display (static indicators)
-    st.markdown("### 🎯 Real-time Requirements")
+    # Requirements display
+    st.markdown("### 🎯 Validation Checklist")
     req_cols = st.columns(5)
     req_data = [
         ('single', '👤', 'One Person'),
@@ -356,34 +342,63 @@ if st.session_state.models_ready:
         ('light', '💡', 'Good Light')
     ]
     
+    # Create placeholders for dynamic updates
+    req_placeholders = {}
     for i, (key, icon, label) in enumerate(req_data):
         with req_cols[i]:
-            st.markdown(
-                f'<div class="req-box req-pending" id="req_{key}">{icon} {label}</div>',
+            req_placeholders[key] = st.empty()
+            req_placeholders[key].markdown(
+                f'<div class="req-box req-pending">{icon} {label}</div>',
                 unsafe_allow_html=True
             )
     
     status_container = st.empty()
     
     with st.expander("💡 Photography Tips", expanded=False):
-        st.markdown("Stand 2-3 feet from camera • Face a light source • AI will remove any background automatically")
-    
-    # RESULT DISPLAY
-    if st.session_state.auto_capture_frame is not None:
-        st.balloons()
-        st.success("✅ Photo captured successfully!")
+        st.markdown("""
+        - Stand 2-3 feet from camera
+        - Face a light source (window/lamp)
+        - Keep head straight and look at camera
+        - Close mouth naturally
+        - Plain background preferred (AI will remove it anyway)
+        """)
+
+    # Main content area
+    if st.session_state.captured_image is not None:
+        # SHOW RESULTS
+        st.success("✅ Photo captured!")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Original Capture")
-            st.image(
-                cv2.cvtColor(st.session_state.auto_capture_frame, cv2.COLOR_BGR2RGB),
-                use_container_width=True
-            )
+            st.subheader("📸 Original Capture")
+            st.image(st.session_state.captured_image, use_container_width=True)
+            
+            # Show validation results
+            results = st.session_state.validation_result
+            if results:
+                st.markdown("#### Validation Results")
+                if results['all']:
+                    st.success("✅ Perfect! All requirements met")
+                else:
+                    if not results['single']:
+                        if results['faces'] == 0:
+                            st.error("❌ No face detected")
+                        else:
+                            st.error(f"❌ Multiple faces detected ({results['faces']})")
+                    elif not results['tilt']:
+                        st.warning("⚠️ Head tilt detected")
+                    elif not results['mouth']:
+                        st.warning("⚠️ Mouth appears open")
+                    elif not results['light']:
+                        st.warning("⚠️ Too dark")
         
         with col2:
-            st.subheader("Professional Format")
+            st.subheader("🎨 Professional Format")
+            
+            # Convert PIL to CV2 for processing
+            img_array = np.array(st.session_state.captured_image)
+            img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
             
             if not st.session_state.rembg_ready:
                 with st.spinner("Loading AI background removal..."):
@@ -392,17 +407,15 @@ if st.session_state.models_ready:
                     st.session_state.rembg_ready = True
             
             with st.spinner("Processing with AI..."):
-                final = create_passport_photo(
-                    st.session_state.auto_capture_frame,
-                    st.session_state.remove_func
-                )
+                final = create_passport_photo(img_cv, st.session_state.remove_func)
             
             final_rgb = cv2.cvtColor(final, cv2.COLOR_BGR2RGB)
             st.image(final_rgb, use_container_width=True)
             
-            pil_img = Image.fromarray(final_rgb)
+            # Download button
+            final_pil = Image.fromarray(final_rgb)
             buf = io.BytesIO()
-            pil_img.save(buf, format='PNG', quality=95)
+            final_pil.save(buf, format='PNG', quality=95)
             
             st.download_button(
                 label="⬇️ Download Professional Picture",
@@ -413,118 +426,120 @@ if st.session_state.models_ready:
             )
         
         if st.button("🔄 Take Another Photo", type="primary", use_container_width=True):
-            st.session_state.auto_capture_frame = None
-            st.session_state.valid_start_time = None
-            st.session_state.camera_running = False
+            st.session_state.captured_image = None
+            st.session_state.validation_result = None
             st.rerun()
     
     else:
-        # WEBRTC CAMERA MODE
-        if not st.session_state.camera_running:
-            st.info("👆 Position yourself in front of the camera!")
+        # CAPTURE MODE
+        status_container.markdown(
+            '<div class="status-bar status-waiting">📹 Take photo using camera or upload</div>',
+            unsafe_allow_html=True
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📱 Camera Capture")
+            st.markdown('<div class="camera-container">', unsafe_allow_html=True)
             
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("📷 Start Camera", type="primary", use_container_width=True):
-                    st.session_state.camera_running = True
+            # Use native camera input
+            camera_photo = st.camera_input(
+                "Take a photo",
+                label_visibility="collapsed",
+                help="Click 'Take Photo' to capture"
+            )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            if camera_photo is not None:
+                # Process camera input
+                image = Image.open(camera_photo)
+                img_array = np.array(image)
+                
+                # Convert to CV2 format for validation
+                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                    img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                else:
+                    img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
+                
+                # Validate
+                results = validator.validate_frame(img_cv)
+                
+                # Update UI indicators
+                for key, icon, label in req_data:
+                    css_class = "req-success" if results[key] else "req-pending"
+                    check = "✓ " if results[key] else ""
+                    req_placeholders[key].markdown(
+                        f'<div class="req-box {css_class}">{icon} {check}{label}</div>',
+                        unsafe_allow_html=True
+                    )
+                
+                if results['all']:
+                    status_container.markdown(
+                        '<div class="status-bar status-success">✅ Perfect! Processing...</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.session_state.captured_image = image
+                    st.session_state.validation_result = results
                     st.rerun()
-            with col2:
-                uploaded = st.file_uploader("Or upload photo", type=['jpg', 'jpeg', 'png'])
-                if uploaded:
-                    file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-                    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                    st.session_state.auto_capture_frame = img
-                    st.rerun()
-        else:
-            if not WEBRTC_AVAILABLE:
-                st.error("Camera streaming requires streamlit-webrtc")
-                st.stop()
+                else:
+                    status_container.markdown(
+                        f'<div class="status-bar status-waiting">⚠️ {results["message"]} - Try again</div>',
+                        unsafe_allow_html=True
+                    )
+                    # Show preview of what was captured with error
+                    st.error(f"❌ {results['message']}")
+                    st.image(image, caption="Retake photo to fix issues", use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 📁 Upload Photo")
+            uploaded = st.file_uploader("Choose image", type=['jpg', 'jpeg', 'png'])
             
-            # CRITICAL FIX: Capture validator in main thread before class definition
-            validator_instance = st.session_state.validator
-            
-            # Video Transformer Class for WebRTC
-            class VideoValidator(VideoTransformerBase):
-                def __init__(self):
-                    # Use the captured instance from main thread, not session_state
-                    self.validator = validator_instance
-                    self.valid_start = None
-                    self.captured = None
-                    self.lock = threading.Lock()
-                    self.last_results = None
-                    
-                def transform(self, frame):
-                    img = frame.to_ndarray(format="bgr24")
-                    img = cv2.flip(img, 1)
-                    h, w = img.shape[:2]
-                    
-                    # Validation every frame (WebRTC handles FPS)
-                    results = self.validator.validate_frame(img)
-                    self.last_results = results
-                    
-                    # Draw face guide ellipse
-                    cv2.ellipse(img, (w//2, h//2), (w//4, h//3), 0, 0, 360, (0, 255, 255), 2)
-                    
-                    if results['all']:
-                        if self.valid_start is None:
-                            self.valid_start = time.time()
-                        
-                        elapsed = time.time() - self.valid_start
-                        remaining = int(max(0, 3 - elapsed))
-                        
-                        if remaining > 0:
-                            # Draw countdown on frame
-                            cv2.circle(img, (w//2, h//2), 160, (0, 255, 0), 4)
-                            cv2.putText(img, str(remaining), (w//2-40, h//2+20), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 5, (0, 255, 0), 5)
-                            cv2.putText(img, "HOLD STILL", (w//2-120, h//2+120), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                        else:
-                            # Capture!
-                            with self.lock:
-                                if self.captured is None:
-                                    self.captured = img.copy()
+            if uploaded:
+                image = Image.open(uploaded)
+                
+                # Convert to CV2
+                img_array = np.array(image)
+                if len(img_array.shape) == 3:
+                    if img_array.shape[2] == 3:
+                        img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                    elif img_array.shape[2] == 4:
+                        img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
                     else:
-                        self.valid_start = None
-                        # Show error message on frame
-                        msg = results.get('message', 'Adjust position')
-                        cv2.putText(img, msg, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                        cv2.ellipse(img, (w//2, h//2), (w//4, h//3), 0, 0, 360, (0, 0, 255), 2)
-                    
-                    return img
-            
-            st.info("🎥 Camera Active - Allow camera access when prompted")
-            
-            # WebRTC Streamer
-            ctx = webrtc_streamer(
-                key="tuf-camera",
-                mode=WebRtcMode.SENDRECV,
-                rtc_configuration=RTCConfiguration({
-                    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-                }),
-                video_transformer_factory=VideoValidator,
-                media_stream_constraints={"video": True, "audio": False},
-                async_processing=True,
-            )
-            
-            # Check for captured frame with error handling
-            if ctx.video_transformer:
-                try:
-                    if ctx.video_transformer.captured is not None:
-                        st.session_state.auto_capture_frame = ctx.video_transformer.captured.copy()
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Capture error: {e}")
-            
-            # Manual stop button
-            if st.button("⏹️ Stop Camera", use_container_width=True):
-                st.session_state.camera_running = False
-                st.rerun()
-            
-            status_container.markdown(
-                '<div class="status-bar status-capture">📸 Position your face in the oval. Auto-capture when conditions met.</div>',
-                unsafe_allow_html=True
-            )
+                        st.error("Invalid image format")
+                        st.stop()
+                else:
+                    # Grayscale
+                    img_cv = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
+                
+                # Validate
+                results = validator.validate_frame(img_cv)
+                
+                # Update UI indicators
+                for key, icon, label in req_data:
+                    css_class = "req-success" if results[key] else "req-pending"
+                    check = "✓ " if results[key] else ""
+                    req_placeholders[key].markdown(
+                        f'<div class="req-box {css_class}">{icon} {check}{label}</div>',
+                        unsafe_allow_html=True
+                    )
+                
+                if results['all']:
+                    status_container.markdown(
+                        '<div class="status-bar status-success">✅ Valid photo uploaded</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.session_state.captured_image = image
+                    st.session_state.validation_result = results
+                    st.rerun()
+                else:
+                    status_container.markdown(
+                        f'<div class="status-bar status-waiting">⚠️ Validation failed</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.error(f"❌ {results['message']}")
+                    st.image(image, caption="This image doesn't meet requirements", use_container_width=True)
 
 else:
     st.error("❌ Failed to initialize AI models")
