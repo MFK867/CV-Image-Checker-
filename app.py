@@ -1,6 +1,6 @@
 import streamlit as st
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import cv2
 import requests
@@ -184,12 +184,13 @@ def validate_cv_photo(image):
     if not is_symmetric:
         issues.append("❌ Face appears tilted or asymmetrical")
     
-    # Check image quality (blur detection)
+    # Check image quality (blur detection) - ADJUSTED THRESHOLD
     gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     details['sharpness_score'] = round(laplacian_var, 2)
     
-    if laplacian_var < 100:
+    # Adjusted threshold for blur detection (50 instead of 100)
+    if laplacian_var < 50:
         issues.append("❌ Image appears blurry or out of focus")
     
     # Check brightness
@@ -219,6 +220,73 @@ def remove_background(image):
     white_bg.paste(img_no_bg, (0, 0), img_no_bg)
     
     return white_bg.convert("RGB")
+
+def add_face_guide_overlay(image):
+    """Add face positioning guide overlay to image"""
+    img_array = np.array(image)
+    h, w = img_array.shape[:2]
+    
+    # Create overlay with transparency
+    overlay = img_array.copy()
+    output = img_array.copy()
+    
+    # Define oval/ellipse for face position (centered)
+    center_x = w // 2
+    center_y = h // 2
+    # Face oval dimensions (typical face aspect ratio)
+    axis_x = int(w * 0.25)  # 25% of width
+    axis_y = int(h * 0.35)  # 35% of height
+    
+    # Draw green oval
+    cv2.ellipse(overlay, (center_x, center_y), (axis_x, axis_y), 
+                0, 0, 360, (0, 255, 0), 3)
+    
+    # Add corner markers for alignment
+    marker_length = 30
+    marker_thickness = 3
+    marker_color = (0, 255, 0)
+    
+    # Top-left corner
+    cv2.line(overlay, (center_x - axis_x, center_y - axis_y), 
+             (center_x - axis_x + marker_length, center_y - axis_y), marker_color, marker_thickness)
+    cv2.line(overlay, (center_x - axis_x, center_y - axis_y), 
+             (center_x - axis_x, center_y - axis_y + marker_length), marker_color, marker_thickness)
+    
+    # Top-right corner
+    cv2.line(overlay, (center_x + axis_x, center_y - axis_y), 
+             (center_x + axis_x - marker_length, center_y - axis_y), marker_color, marker_thickness)
+    cv2.line(overlay, (center_x + axis_x, center_y - axis_y), 
+             (center_x + axis_x, center_y - axis_y + marker_length), marker_color, marker_thickness)
+    
+    # Bottom-left corner
+    cv2.line(overlay, (center_x - axis_x, center_y + axis_y), 
+             (center_x - axis_x + marker_length, center_y + axis_y), marker_color, marker_thickness)
+    cv2.line(overlay, (center_x - axis_x, center_y + axis_y), 
+             (center_x - axis_x, center_y + axis_y - marker_length), marker_color, marker_thickness)
+    
+    # Bottom-right corner
+    cv2.line(overlay, (center_x + axis_x, center_y + axis_y), 
+             (center_x + axis_x - marker_length, center_y + axis_y), marker_color, marker_thickness)
+    cv2.line(overlay, (center_x + axis_x, center_y + axis_y), 
+             (center_x + axis_x, center_y + axis_y - marker_length), marker_color, marker_thickness)
+    
+    # Add text instructions
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    text = "Align face within oval"
+    text_size = cv2.getTextSize(text, font, 0.7, 2)[0]
+    text_x = (w - text_size[0]) // 2
+    text_y = center_y - axis_y - 20
+    
+    # Draw text background
+    cv2.rectangle(overlay, (text_x - 10, text_y - text_size[1] - 10), 
+                  (text_x + text_size[0] + 10, text_y + 10), (0, 0, 0), -1)
+    cv2.putText(overlay, text, (text_x, text_y), font, 0.7, (0, 255, 0), 2)
+    
+    # Blend overlay with original
+    alpha = 0.7
+    cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
+    
+    return Image.fromarray(output)
 
 # Initialize session state
 if 'camera_active' not in st.session_state:
@@ -301,9 +369,9 @@ with tab2:
     st.markdown("""
     ### Instructions:
     1. Click "Open Camera" below to activate your camera
-    2. Position yourself in front of the camera
-    3. Take the photo when ready
-    4. The photo will be validated automatically
+    2. Align your face within the green oval guide
+    3. Keep your head straight and centered
+    4. Take the photo when ready
     """)
     
     # Camera control
@@ -317,15 +385,37 @@ with tab2:
         if st.button("❌ Close Camera", type="secondary", disabled=not st.session_state.camera_active):
             st.session_state.camera_active = False
     
-    # Camera input
+    # Camera input with overlay
     camera_photo = None
     if st.session_state.camera_active:
-        st.info("📸 Camera is active. Take a photo when ready!")
+        st.info("📸 Camera is active. Align your face within the green oval guide!")
+        
+        # Show guide overlay example
+        guide_col1, guide_col2 = st.columns([1, 2])
+        with guide_col1:
+            st.markdown("**Position Guide:**")
+            st.markdown("✅ Face centered in oval")
+            st.markdown("✅ Head straight")
+            st.markdown("✅ Good lighting")
+        
         camera_photo = st.camera_input("", key="camera", label_visibility="collapsed")
     
     # Process captured photo
     if camera_photo is not None:
         image = Image.open(camera_photo)
+        
+        # Add face guide overlay to show user where to position
+        image_with_guide = add_face_guide_overlay(image)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Captured Photo")
+            st.image(image, use_container_width=True)
+            
+            # Show the guide overlay as reference
+            with st.expander("Show Positioning Guide"):
+                st.image(image_with_guide, caption="This is how you should position your face", use_container_width=True)
         
         with st.spinner("Analyzing photo..."):
             try:
@@ -336,22 +426,20 @@ with tab2:
                 st.error(traceback.format_exc())
                 st.stop()
         
-        # Show validation results
-        if is_valid:
-            st.success("🎉 Your photo looks great!")
-        else:
-            st.warning("⚠️ Photo needs adjustment:")
-            for issue in issues:
-                st.markdown(f"- {issue}")
-        
-        # Display images
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Captured Photo")
-            st.image(image, use_container_width=True)
-        
         with col2:
+            st.subheader("Validation Results")
+            
+            # Show validation results
+            if is_valid:
+                st.success("🎉 Your photo looks great!")
+            else:
+                st.warning("⚠️ Photo needs adjustment:")
+                for issue in issues:
+                    st.markdown(f"- {issue}")
+            
+            with st.expander("Technical Details"):
+                st.json(details)
+            
             if is_valid:
                 st.subheader("With White Background")
                 with st.spinner("Removing background..."):
