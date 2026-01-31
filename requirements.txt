@@ -4,6 +4,6 @@ Pillow
 numpy
 rembg
 onnxruntime
-mediapipe==0.10.14
+mediapipe
 streamlit-webrtc
 aiortc
