@@ -1,9 +1,6 @@
 import streamlit as st
-import cv2
 import numpy as np
 from PIL import Image
-import mediapipe as mp
-from rembg import remove
 import io
 
 # Page configuration - MUST be first Streamlit command
@@ -13,12 +10,39 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize MediaPipe Face Detection and Face Mesh
-mp_face_detection = mp.solutions.face_detection
-mp_face_mesh = mp.solutions.face_mesh
+# Lazy load heavy libraries to prevent timeout during import
+@st.cache_resource
+def load_mediapipe():
+    """Lazy load mediapipe to prevent import timeout"""
+    import mediapipe as mp
+    return mp
+
+@st.cache_resource  
+def load_cv2():
+    """Lazy load cv2 to prevent import timeout"""
+    import cv2
+    return cv2
+
+# Initialize only when needed
+mp = None
+cv2 = None
+
+def get_mediapipe():
+    global mp
+    if mp is None:
+        mp = load_mediapipe()
+    return mp
+
+def get_cv2():
+    global cv2
+    if cv2 is None:
+        cv2 = load_cv2()
+    return cv2
 
 def check_eyes_open(face_landmarks):
     """Check if eyes are open using eye aspect ratio"""
+    mp_module = get_mediapipe()
+    
     left_eye = [face_landmarks.landmark[i] for i in [159, 145, 133, 33]]
     right_eye = [face_landmarks.landmark[i] for i in [386, 374, 362, 263]]
     
@@ -58,15 +82,19 @@ def check_face_alignment(face_landmarks, image_width, image_height):
 
 def validate_cv_photo(image):
     """Validate if photo meets CV requirements"""
+    cv2_module = get_cv2()
+    mp_module = get_mediapipe()
+    
     img_array = np.array(image)
-    img_rgb = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    img_rgb = cv2_module.cvtColor(img_array, cv2_module.COLOR_RGB2BGR)
     
     issues = []
     details = {}
     
     # Face Detection
+    mp_face_detection = mp_module.solutions.face_detection
     face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
-    results = face_detection.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    results = face_detection.process(cv2_module.cvtColor(img_rgb, cv2_module.COLOR_BGR2RGB))
     face_detection.close()
     
     if not results.detections:
@@ -78,12 +106,13 @@ def validate_cv_photo(image):
         return False, issues, None, details
     
     # Face Mesh for detailed analysis
+    mp_face_mesh = mp_module.solutions.face_mesh
     face_mesh = mp_face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
         min_detection_confidence=0.5
     )
-    results = face_mesh.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    results = face_mesh.process(cv2_module.cvtColor(img_rgb, cv2_module.COLOR_BGR2RGB))
     face_mesh.close()
     
     if results.multi_face_landmarks:
@@ -115,6 +144,8 @@ def validate_cv_photo(image):
 
 def remove_background(image):
     """Remove background and replace with white"""
+    from rembg import remove
+    
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
     img_byte_arr = img_byte_arr.getvalue()
@@ -159,7 +190,11 @@ with tab1:
             st.image(image, use_container_width=True)
         
         with st.spinner("Analyzing photo..."):
-            is_valid, issues, img_array, details = validate_cv_photo(image)
+            try:
+                is_valid, issues, img_array, details = validate_cv_photo(image)
+            except Exception as e:
+                st.error(f"Error processing image: {str(e)}")
+                st.stop()
         
         with col2:
             st.subheader("Validation Results")
@@ -173,17 +208,20 @@ with tab1:
                 
                 if st.button("🎨 Remove Background & Make White", key="remove_bg_upload"):
                     with st.spinner("Processing..."):
-                        white_bg_image = remove_background(image)
-                        st.image(white_bg_image, caption="White Background Version", use_container_width=True)
-                        
-                        buf = io.BytesIO()
-                        white_bg_image.save(buf, format="PNG")
-                        st.download_button(
-                            label="⬇️ Download Photo",
-                            data=buf.getvalue(),
-                            file_name="cv_photo_white_bg.png",
-                            mime="image/png"
-                        )
+                        try:
+                            white_bg_image = remove_background(image)
+                            st.image(white_bg_image, caption="White Background Version", use_container_width=True)
+                            
+                            buf = io.BytesIO()
+                            white_bg_image.save(buf, format="PNG")
+                            st.download_button(
+                                label="⬇️ Download Photo",
+                                data=buf.getvalue(),
+                                file_name="cv_photo_white_bg.png",
+                                mime="image/png"
+                            )
+                        except Exception as e:
+                            st.error(f"Error removing background: {str(e)}")
             else:
                 st.error("❌ **Photo needs improvement**")
                 st.markdown("### Issues Found:")
@@ -226,7 +264,11 @@ with tab2:
         image = Image.open(camera_photo)
         
         with st.spinner("Analyzing photo..."):
-            is_valid, issues, img_array, details = validate_cv_photo(image)
+            try:
+                is_valid, issues, img_array, details = validate_cv_photo(image)
+            except Exception as e:
+                st.error(f"Error processing image: {str(e)}")
+                st.stop()
         
         # Show validation results
         if is_valid:
@@ -247,18 +289,21 @@ with tab2:
             if is_valid:
                 st.subheader("With White Background")
                 with st.spinner("Removing background..."):
-                    white_bg_image = remove_background(image)
-                    st.image(white_bg_image, use_container_width=True)
-                    
-                    buf = io.BytesIO()
-                    white_bg_image.save(buf, format="PNG")
-                    st.download_button(
-                        label="⬇️ Download CV Photo",
-                        data=buf.getvalue(),
-                        file_name="cv_photo_final.png",
-                        mime="image/png",
-                        key="download_camera"
-                    )
+                    try:
+                        white_bg_image = remove_background(image)
+                        st.image(white_bg_image, use_container_width=True)
+                        
+                        buf = io.BytesIO()
+                        white_bg_image.save(buf, format="PNG")
+                        st.download_button(
+                            label="⬇️ Download CV Photo",
+                            data=buf.getvalue(),
+                            file_name="cv_photo_final.png",
+                            mime="image/png",
+                            key="download_camera"
+                        )
+                    except Exception as e:
+                        st.error(f"Error removing background: {str(e)}")
 
 # Footer
 st.markdown("---")
