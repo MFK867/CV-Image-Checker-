@@ -190,7 +190,7 @@ def validate_cv_photo(image):
     details['sharpness_score'] = round(laplacian_var, 2)
     
     # Adjusted threshold for blur detection (50 instead of 100)
-    if laplacian_var < 50:
+    if laplacian_var < 10:
         issues.append("❌ Image appears blurry or out of focus")
     
     # Check brightness
