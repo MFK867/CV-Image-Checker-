@@ -24,7 +24,7 @@ except ImportError:
     CV2_AVAILABLE = False
     st.error("⚠️ OpenCV not available")
 
-# CSS Styles (keep your existing styles)
+# CSS Styles
 st.markdown("""
 <style>
     .main-header { font-size: 2.2rem; font-weight: bold; color: #1f2937; text-align: center; margin-bottom: 0.5rem; }
@@ -440,10 +440,14 @@ if st.session_state.models_ready:
                 st.error("Camera streaming requires streamlit-webrtc")
                 st.stop()
             
+            # CRITICAL FIX: Capture validator in main thread before class definition
+            validator_instance = st.session_state.validator
+            
             # Video Transformer Class for WebRTC
             class VideoValidator(VideoTransformerBase):
                 def __init__(self):
-                    self.validator = st.session_state.validator
+                    # Use the captured instance from main thread, not session_state
+                    self.validator = validator_instance
                     self.valid_start = None
                     self.captured = None
                     self.lock = threading.Lock()
@@ -503,11 +507,14 @@ if st.session_state.models_ready:
                 async_processing=True,
             )
             
-            # Check for captured frame
+            # Check for captured frame with error handling
             if ctx.video_transformer:
-                if ctx.video_transformer.captured is not None:
-                    st.session_state.auto_capture_frame = ctx.video_transformer.captured.copy()
-                    st.rerun()
+                try:
+                    if ctx.video_transformer.captured is not None:
+                        st.session_state.auto_capture_frame = ctx.video_transformer.captured.copy()
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Capture error: {e}")
             
             # Manual stop button
             if st.button("⏹️ Stop Camera", use_container_width=True):
