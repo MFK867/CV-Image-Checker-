@@ -1,4 +1,4 @@
-mediapipe
+mediapipe<0.10.5
 opencv-python-headless
 streamlit
 pillow
