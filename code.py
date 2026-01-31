@@ -70,45 +70,74 @@ st.markdown('<h2 class="sub-header">Placement Bureau - Professional Picture Vali
 
 @st.cache_resource(show_spinner=False)
 def load_face_detector():
-    """Load face detector - tries MediaPipe first, falls back to OpenCV DNN"""
+    """Load face detector - uses Haar Cascade as reliable fallback"""
+    detector_type = None
+    detector = None
+    mesh = None
+    error_msg = None
+    
+    # Try MediaPipe first
     try:
-        # Try MediaPipe first (legacy API)
         import mediapipe as mp
         
-        # Check if solutions is available
-        if hasattr(mp, 'solutions'):
-            mp_face_detection = mp.solutions.face_detection
-            mp_face_mesh = mp.solutions.face_mesh
-            
-            face_detection = mp_face_detection.FaceDetection(
-                model_selection=1, 
-                min_detection_confidence=0.5
-            )
-            face_mesh = mp_face_mesh.FaceMesh(
-                max_num_faces=1, 
-                refine_landmarks=True, 
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            return {'type': 'mediapipe', 'detector': face_detection, 'mesh': face_mesh, 'error': None}
+        # Check for legacy API (solutions)
+        if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'face_detection'):
+            try:
+                mp_face_detection = mp.solutions.face_detection
+                mp_face_mesh = mp.solutions.face_mesh
+                
+                face_detection = mp_face_detection.FaceDetection(
+                    model_selection=1, 
+                    min_detection_confidence=0.5
+                )
+                face_mesh = mp_face_mesh.FaceMesh(
+                    max_num_faces=1, 
+                    refine_landmarks=True, 
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                
+                # Test if it actually works
+                test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+                test_result = face_detection.process(test_img)
+                
+                return {
+                    'type': 'mediapipe',
+                    'detector': face_detection,
+                    'mesh': face_mesh,
+                    'error': None
+                }
+            except Exception as e:
+                error_msg = f"MediaPipe solutions failed: {str(e)}"
         else:
-            # MediaPipe installed but no solutions (newer API only)
-            return {'type': 'fallback', 'detector': None, 'mesh': None, 'error': 'MediaPipe solutions not available'}
-            
+            error_msg = "MediaPipe solutions not available (using newer API without legacy support)"
+    except ImportError:
+        error_msg = "MediaPipe not installed"
     except Exception as e:
-        # If mediapipe fails entirely, use OpenCV DNN as fallback
-        try:
-            # Load OpenCV DNN face detector
-            proto = "deploy.prototxt"
-            model = "res10_300x300_ssd_iter_140000.caffemodel"
-            
-            # Check if model files exist, if not use Haar Cascade
-            detector = cv2.dnn.readNetFromCaffe(proto, model)
-            return {'type': 'opencv_dnn', 'detector': detector, 'mesh': None, 'error': None}
-        except:
-            # Ultimate fallback - Haar Cascade
-            cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            return {'type': 'haar', 'detector': cascade, 'mesh': None, 'error': None}
+        error_msg = f"MediaPipe error: {str(e)}"
+    
+    # Fallback to Haar Cascade (always available with OpenCV)
+    try:
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cascade = cv2.CascadeClassifier(cascade_path)
+        
+        # Verify it loaded
+        if cascade.empty():
+            raise Exception("Haar Cascade failed to load")
+        
+        return {
+            'type': 'haar',
+            'detector': cascade,
+            'mesh': None,
+            'error': error_msg
+        }
+    except Exception as e:
+        return {
+            'type': 'none',
+            'detector': None,
+            'mesh': None,
+            'error': f"All detectors failed. Haar error: {str(e)}, MediaPipe: {error_msg}"
+        }
 
 @st.cache_resource(show_spinner=False)
 def load_rembg_model():
@@ -116,12 +145,18 @@ def load_rembg_model():
         from rembg import remove
         import onnxruntime as ort
         ort.set_default_logger_severity(3)
+        # Test it works
+        test_img = Image.new('RGB', (10, 10), color='white')
+        _ = remove(test_img)
         return remove
     except Exception as e:
-        st.error(f"rembg not available: {e}")
+        st.warning(f"⚠️ Background removal unavailable: {e}")
         return None
 
 def fast_remove_background(image, remove_func):
+    if remove_func is None:
+        return image
+        
     try:
         original_h, original_w = image.shape[:2]
         
@@ -169,7 +204,7 @@ def fast_remove_background(image, remove_func):
             return cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
             
     except Exception as e:
-        st.error(f"Background removal failed: {e}")
+        st.warning(f"Background removal failed: {e}")
         return image
 
 def create_passport_photo(image, remove_func):
@@ -212,17 +247,23 @@ def create_passport_photo(image, remove_func):
     return final
 
 class SimpleValidator:
-    """Simplified validator that works with MediaPipe or OpenCV Haar Cascade"""
+    """Simplified validator that works with MediaPipe or Haar Cascade"""
     def __init__(self, detector_info):
         self.detector_info = detector_info
-        self.MAX_TILT = 20
-        self.MAX_MOUTH = 0.05
+        self.detector_type = detector_info['type']
+        self.detector = detector_info['detector']
+        self.mesh = detector_info.get('mesh')
         
     def validate_frame(self, image):
         h, w = image.shape[:2]
         results = {
-            'single': False, 'straight': True, 'tilt': True,  # Assume true for simple version
-            'mouth': True, 'light': True, 'all': False, 'faces': 0
+            'single': False,
+            'straight': True,  # Simplified for Haar
+            'tilt': True,      # Simplified for Haar
+            'mouth': True,     # Simplified for Haar
+            'light': True,
+            'all': False,
+            'faces': 0
         }
         
         # Check brightness
@@ -230,58 +271,66 @@ class SimpleValidator:
         if brightness < 40:
             results['light'] = False
         
-        detector_type = self.detector_info['type']
-        detector = self.detector_info['detector']
-        
-        faces = []
-        
-        if detector_type == 'mediapipe':
+        if self.detector_type == 'mediapipe':
             # MediaPipe detection
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            det_results = detector.process(rgb)
+            det_results = self.detector.process(rgb)
+            
             if det_results.detections:
-                faces = det_results.detections
-                results['faces'] = len(faces)
-                if len(faces) == 1:
+                results['faces'] = len(det_results.detections)
+                if len(det_results.detections) == 1:
                     results['single'] = True
                     
-                    # Try to get mesh for mouth/tilt
-                    mesh_detector = self.detector_info.get('mesh')
-                    if mesh_detector:
-                        mesh_results = mesh_detector.process(rgb)
-                        if mesh_results.multi_face_landmarks:
-                            # Basic face present check
-                            results['straight'] = True
-                            results['tilt'] = True
-                            results['mouth'] = True
+                    # Try mesh for detailed validation
+                    if self.mesh:
+                        try:
+                            mesh_results = self.mesh.process(rgb)
+                            if mesh_results.multi_face_landmarks:
+                                landmarks = mesh_results.multi_face_landmarks[0]
+                                
+                                # Check face tilt (simplified)
+                                nose_tip = landmarks.landmark[1]
+                                left_eye = landmarks.landmark[33]
+                                right_eye = landmarks.landmark[263]
+                                
+                                eye_diff = abs(left_eye.y - right_eye.y)
+                                if eye_diff > 0.05:
+                                    results['tilt'] = False
+                                
+                                # Check mouth (simplified)
+                                upper_lip = landmarks.landmark[13]
+                                lower_lip = landmarks.landmark[14]
+                                mouth_open = abs(upper_lip.y - lower_lip.y)
+                                if mouth_open > 0.03:
+                                    results['mouth'] = False
+                        except:
+                            pass  # Keep defaults
         
-        elif detector_type == 'haar':
+        elif self.detector_type == 'haar':
             # Haar Cascade detection
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            faces = detector.detectMultiScale(gray, 1.1, 4)
+            faces = self.detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(100, 100)
+            )
+            
             results['faces'] = len(faces)
             if len(faces) == 1:
                 results['single'] = True
+                # With Haar, we assume other conditions are OK if face is detected
+                # (we can't reliably check tilt/mouth/straight with Haar alone)
         
-        elif detector_type == 'opencv_dnn':
-            # DNN detection
-            blob = cv2.dnn.blobFromImage(cv2.resize(image, (300, 300)), 1.0,
-                                         (300, 300), (104.0, 177.0, 123.0))
-            detector.setInput(blob)
-            detections = detector.forward()
-            
-            face_count = 0
-            for i in range(detections.shape[2]):
-                confidence = detections[0, 0, i, 2]
-                if confidence > 0.5:
-                    face_count += 1
-            
-            results['faces'] = face_count
-            if face_count == 1:
-                results['single'] = True
+        # All conditions must be met
+        results['all'] = all([
+            results['single'],
+            results['straight'],
+            results['tilt'],
+            results['mouth'],
+            results['light']
+        ])
         
-        results['all'] = all([results['single'], results['straight'], 
-                             results['tilt'], results['mouth'], results['light']])
         return results
 
 # Load models with error handling
@@ -289,18 +338,23 @@ if not st.session_state.models_ready:
     with st.spinner("🚀 Initializing AI Models..."):
         detector_info = load_face_detector()
         
-        if detector_info['error']:
-            st.warning(f"MediaPipe issue: {detector_info['error']}. Using fallback mode.")
-            st.session_state.fallback_mode = True
-        
-        if detector_info['detector'] is not None:
-            st.session_state.detector_info = detector_info
-            st.session_state.validator = SimpleValidator(detector_info)
-            st.session_state.models_ready = True
-            st.success(f"✅ Loaded: {detector_info['type']}")
-        else:
-            st.error("❌ No face detector available")
+        if detector_info['type'] == 'none':
+            st.error(f"❌ Face detection failed: {detector_info['error']}")
             st.stop()
+        
+        if detector_info['error']:
+            st.warning(f"ℹ️ {detector_info['error']}")
+        
+        st.session_state.detector_info = detector_info
+        st.session_state.validator = SimpleValidator(detector_info)
+        st.session_state.models_ready = True
+        
+        detector_name = {
+            'mediapipe': 'MediaPipe Face Detection',
+            'haar': 'OpenCV Haar Cascade'
+        }.get(detector_info['type'], 'Unknown')
+        
+        st.success(f"✅ Loaded: {detector_name}")
 
 if st.session_state.models_ready:
     validator = st.session_state.validator
@@ -309,8 +363,10 @@ if st.session_state.models_ready:
     st.markdown("### 🎯 Real-time Requirements")
     req_cols = st.columns(5)
     req_data = [
-        ('single', '👤', 'One Person'), ('straight', '👀', 'Straight Look'),
-        ('tilt', '🧍', 'No Head Tilt'), ('mouth', '😶', 'Mouth Closed'),
+        ('single', '👤', 'One Person'),
+        ('straight', '👀', 'Straight Look'),
+        ('tilt', '🧍', 'No Head Tilt'),
+        ('mouth', '😶', 'Mouth Closed'),
         ('light', '💡', 'Good Light')
     ]
     
@@ -319,13 +375,13 @@ if st.session_state.models_ready:
         with req_cols[i]:
             req_containers[key] = st.empty()
             req_containers[key].markdown(
-                f'<div class="req-box req-pending">{icon} {label}</div>', 
+                f'<div class="req-box req-pending">{icon} {label}</div>',
                 unsafe_allow_html=True
             )
     
     status_container = st.empty()
     status_container.markdown(
-        '<div class="status-bar status-waiting">📹 Press "Start Camera" to begin</div>', 
+        '<div class="status-bar status-waiting">📹 Press "Start Camera" to begin</div>',
         unsafe_allow_html=True
     )
     
@@ -341,8 +397,10 @@ if st.session_state.models_ready:
         
         with col1:
             st.subheader("Original Capture")
-            st.image(cv2.cvtColor(st.session_state.auto_capture_frame, cv2.COLOR_BGR2RGB), 
-                    use_container_width=True)
+            st.image(
+                cv2.cvtColor(st.session_state.auto_capture_frame, cv2.COLOR_BGR2RGB),
+                use_container_width=True
+            )
         
         with col2:
             st.subheader("Professional Format")
@@ -350,16 +408,12 @@ if st.session_state.models_ready:
             if not st.session_state.rembg_ready:
                 with st.spinner("Loading AI background removal..."):
                     remove_func = load_rembg_model()
-                    if remove_func:
-                        st.session_state.remove_func = remove_func
-                        st.session_state.rembg_ready = True
-                    else:
-                        st.error("Background removal not available")
-                        st.stop()
+                    st.session_state.remove_func = remove_func
+                    st.session_state.rembg_ready = True
             
             with st.spinner("Processing with AI..."):
                 final = create_passport_photo(
-                    st.session_state.auto_capture_frame, 
+                    st.session_state.auto_capture_frame,
                     st.session_state.remove_func
                 )
             
@@ -396,7 +450,7 @@ if st.session_state.models_ready:
                     st.session_state.camera_running = True
                     st.rerun()
             with col2:
-                uploaded = st.file_uploader("Or upload photo", type=['jpg','jpeg','png'])
+                uploaded = st.file_uploader("Or upload photo", type=['jpg', 'jpeg', 'png'])
                 if uploaded:
                     file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
                     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -471,7 +525,7 @@ if st.session_state.models_ready:
                                     status_text.text(f"Capturing in {remaining}...")
                                 
                                 status_container.markdown(
-                                    f'<div class="status-bar status-capture">📸 Hold position...</div>',
+                                    '<div class="status-bar status-capture">📸 Hold position...</div>',
                                     unsafe_allow_html=True
                                 )
                                 
@@ -488,11 +542,19 @@ if st.session_state.models_ready:
                             COUNTDOWN_HTML.empty()
                             
                             missing = []
-                            if not results['single']: missing.append("Show face")
-                            elif not results['straight']: missing.append("Look straight")
-                            elif not results['tilt']: missing.append("Straighten head")
-                            elif not results['mouth']: missing.append("Close mouth")
-                            elif not results['light']: missing.append("More light")
+                            if not results['single']:
+                                if results['faces'] == 0:
+                                    missing.append("Show face")
+                                else:
+                                    missing.append("One person only")
+                            elif not results['straight']:
+                                missing.append("Look straight")
+                            elif not results['tilt']:
+                                missing.append("Straighten head")
+                            elif not results['mouth']:
+                                missing.append("Close mouth")
+                            elif not results['light']:
+                                missing.append("More light")
                             
                             msg = " | ".join(missing) if missing else "Adjust..."
                             status_container.markdown(
@@ -504,7 +566,7 @@ if st.session_state.models_ready:
                     frame_counter += 1
                     
                     h, w = frame.shape[:2]
-                    cv2.ellipse(frame, (w//2, h//2), (w//4, h//3), 0, 0, 360, (0,255,255), 2)
+                    cv2.ellipse(frame, (w//2, h//2), (w//4, h//3), 0, 0, 360, (0, 255, 255), 2)
                     
                     FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
                     time.sleep(0.033)
