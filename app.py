@@ -2,6 +2,9 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 import io
+import cv2
+import requests
+import os
 
 # Page configuration - MUST be first Streamlit command
 st.set_page_config(
@@ -10,132 +13,193 @@ st.set_page_config(
     layout="wide"
 )
 
-# Lazy load heavy libraries to prevent timeout during import
+# Download face detection model if not exists
 @st.cache_resource
-def load_mediapipe():
-    """Lazy load mediapipe to prevent import timeout"""
-    import mediapipe as mp
-    return mp
-
-@st.cache_resource  
-def load_cv2():
-    """Lazy load cv2 to prevent import timeout"""
-    import cv2
-    return cv2
-
-# Global variables for cached modules
-_mediapipe_module = None
-_cv2_module = None
-
-def get_mediapipe():
-    global _mediapipe_module
-    if _mediapipe_module is None:
-        _mediapipe_module = load_mediapipe()
-    return _mediapipe_module
-
-def get_cv2():
-    global _cv2_module
-    if _cv2_module is None:
-        _cv2_module = load_cv2()
-    return _cv2_module
-
-def check_eyes_open(face_landmarks):
-    """Check if eyes are open using eye aspect ratio"""
-    left_eye = [face_landmarks.landmark[i] for i in [159, 145, 133, 33]]
-    right_eye = [face_landmarks.landmark[i] for i in [386, 374, 362, 263]]
+def download_face_detector():
+    """Download OpenCV DNN face detection model"""
+    model_dir = "models"
+    os.makedirs(model_dir, exist_ok=True)
     
-    def eye_aspect_ratio(eye):
-        v1 = abs(eye[1].y - eye[3].y)
-        v2 = abs(eye[0].y - eye[2].y)
-        h = abs(eye[0].x - eye[2].x)
-        ear = (v1 + v2) / (2.0 * h)
-        return ear
+    prototxt_path = os.path.join(model_dir, "deploy.prototxt")
+    model_path = os.path.join(model_dir, "res10_300x300_ssd_iter_140000.caffemodel")
     
-    left_ear = eye_aspect_ratio(left_eye)
-    right_ear = eye_aspect_ratio(right_eye)
-    avg_ear = (left_ear + right_ear) / 2.0
+    # Download prototxt if not exists
+    if not os.path.exists(prototxt_path):
+        prototxt_url = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
+        response = requests.get(prototxt_url)
+        with open(prototxt_path, 'wb') as f:
+            f.write(response.content)
     
-    return avg_ear > 0.15, avg_ear
+    # Download caffemodel if not exists
+    if not os.path.exists(model_path):
+        model_url = "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+        response = requests.get(model_url)
+        with open(model_path, 'wb') as f:
+            f.write(response.content)
+    
+    # Load the model
+    net = cv2.dnn.readNetFromCaffe(prototxt_path, model_path)
+    return net
 
-def check_mouth_closed(face_landmarks):
-    """Check if mouth is closed"""
-    upper_lip = face_landmarks.landmark[13]
-    lower_lip = face_landmarks.landmark[14]
-    mouth_opening = abs(upper_lip.y - lower_lip.y)
-    return mouth_opening < 0.02, mouth_opening
+def detect_face_dnn(image, net):
+    """Detect face using OpenCV DNN"""
+    img_array = np.array(image)
+    (h, w) = img_array.shape[:2]
+    
+    # Create blob from image
+    blob = cv2.dnn.blobFromImage(cv2.resize(img_array, (300, 300)), 1.0,
+        (300, 300), (104.0, 177.0, 123.0))
+    
+    # Pass the blob through the network
+    net.setInput(blob)
+    detections = net.forward()
+    
+    faces = []
+    for i in range(0, detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > 0.5:
+            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+            (startX, startY, endX, endY) = box.astype("int")
+            faces.append({
+                'box': (startX, startY, endX, endY),
+                'confidence': float(confidence)
+            })
+    
+    return faces
 
-def check_face_alignment(face_landmarks, image_width, image_height):
-    """Check if face is straight and centered"""
-    nose_tip = face_landmarks.landmark[1]
-    left_eye = face_landmarks.landmark[33]
-    right_eye = face_landmarks.landmark[263]
+def check_face_position(faces, img_width, img_height):
+    """Check if face is centered and properly positioned"""
+    if not faces:
+        return False, False, False
     
-    eye_diff_y = abs(left_eye.y - right_eye.y)
-    is_straight = eye_diff_y < 0.03
+    # Get the largest face
+    largest_face = max(faces, key=lambda x: (x['box'][2] - x['box'][0]) * (x['box'][3] - x['box'][1]))
+    (startX, startY, endX, endY) = largest_face['box']
     
-    nose_x = nose_tip.x
-    is_centered = 0.35 < nose_x < 0.65
+    # Calculate face center
+    face_center_x = (startX + endX) / 2
+    face_center_y = (startY + endY) / 2
     
-    return is_straight and is_centered, is_straight, is_centered
+    img_center_x = img_width / 2
+    img_center_y = img_height / 2
+    
+    # Check if face is centered (within 30% of center)
+    is_centered_x = abs(face_center_x - img_center_x) < (img_width * 0.3)
+    is_centered_y = abs(face_center_y - img_center_y) < (img_height * 0.3)
+    
+    # Check if face is too small or too large
+    face_width = endX - startX
+    face_height = endY - startY
+    face_ratio = (face_width * face_height) / (img_width * img_height)
+    
+    is_good_size = 0.1 < face_ratio < 0.8
+    
+    return is_centered_x and is_centered_y, is_good_size, True
+
+def check_eye_symmetry(img_array, faces):
+    """Basic eye symmetry check using simple image processing"""
+    if not faces:
+        return True, 0.0
+    
+    # Get the largest face
+    largest_face = max(faces, key=lambda x: (x['box'][2] - x['box'][0]) * (x['box'][3] - x['box'][1]))
+    (startX, startY, endX, endY) = largest_face['box']
+    
+    # Extract face region
+    face_roi = img_array[startY:endY, startX:endX]
+    if face_roi.size == 0:
+        return True, 0.0
+    
+    # Convert to grayscale
+    if len(face_roi.shape) == 3:
+        gray = cv2.cvtColor(face_roi, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = face_roi
+    
+    # Simple symmetry check - compare left and right halves
+    h, w = gray.shape
+    if w < 10:
+        return True, 0.0
+    
+    left_half = gray[:, :w//2]
+    right_half = cv2.flip(gray[:, w//2:], 1)
+    
+    # Resize to same size if needed
+    min_w = min(left_half.shape[1], right_half.shape[1])
+    left_half = left_half[:, :min_w]
+    right_half = right_half[:, :min_w]
+    
+    # Calculate symmetry score
+    diff = cv2.absdiff(left_half, right_half)
+    symmetry_score = 1.0 - (np.mean(diff) / 255.0)
+    
+    # Consider symmetric if score > 0.6
+    is_symmetric = symmetry_score > 0.6
+    
+    return is_symmetric, symmetry_score
 
 def validate_cv_photo(image):
-    """Validate if photo meets CV requirements"""
-    cv2_module = get_cv2()
-    mp_module = get_mediapipe()
-    
-    img_array = np.array(image)
-    img_rgb = cv2_module.cvtColor(img_array, cv2_module.COLOR_RGB2BGR)
-    
+    """Validate if photo meets CV requirements using OpenCV only"""
     issues = []
     details = {}
     
-    # Face Detection
-    mp_face_detection = mp_module.solutions.face_detection
-    face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
-    results = face_detection.process(cv2_module.cvtColor(img_rgb, cv2_module.COLOR_BGR2RGB))
-    face_detection.close()
+    # Load face detector
+    try:
+        net = download_face_detector()
+    except Exception as e:
+        issues.append(f"❌ Failed to load face detection model: {str(e)}")
+        return False, issues, None, details
     
-    if not results.detections:
+    # Convert PIL to numpy array
+    img_array = np.array(image)
+    img_rgb = img_array  # Already RGB from PIL
+    
+    # Detect faces
+    faces = detect_face_dnn(image, net)
+    
+    if not faces:
         issues.append("❌ No face detected in the image")
         return False, issues, None, details
     
-    if len(results.detections) > 1:
-        issues.append(f"❌ Multiple faces detected ({len(results.detections)}). Only one person should be in the photo")
+    if len(faces) > 1:
+        issues.append(f"❌ Multiple faces detected ({len(faces)}). Only one person should be in the photo")
         return False, issues, None, details
     
-    # Face Mesh for detailed analysis
-    mp_face_mesh = mp_module.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        min_detection_confidence=0.5
-    )
-    results = face_mesh.process(cv2_module.cvtColor(img_rgb, cv2_module.COLOR_BGR2RGB))
-    face_mesh.close()
+    # Check face position
+    is_centered, is_good_size, face_found = check_face_position(faces, img_rgb.shape[1], img_rgb.shape[0])
+    details['face_centered'] = is_centered
+    details['face_good_size'] = is_good_size
+    details['face_confidence'] = round(faces[0]['confidence'], 3)
     
-    if results.multi_face_landmarks:
-        face_landmarks = results.multi_face_landmarks[0]
-        
-        eyes_open, ear_value = check_eyes_open(face_landmarks)
-        details['eye_aspect_ratio'] = round(ear_value, 3)
-        if not eyes_open:
-            issues.append("❌ Eyes appear to be closed or partially closed")
-        
-        mouth_closed, mouth_value = check_mouth_closed(face_landmarks)
-        details['mouth_opening'] = round(mouth_value, 3)
-        if not mouth_closed:
-            issues.append("❌ Mouth appears to be open")
-        
-        is_aligned, is_straight, is_centered = check_face_alignment(
-            face_landmarks, img_rgb.shape[1], img_rgb.shape[0]
-        )
-        details['face_straight'] = is_straight
-        details['face_centered'] = is_centered
-        
-        if not is_straight:
-            issues.append("❌ Face is tilted - please keep your head straight")
-        if not is_centered:
-            issues.append("❌ Face is not centered in the frame")
+    if not is_centered:
+        issues.append("❌ Face is not centered in the frame")
+    
+    if not is_good_size:
+        issues.append("❌ Face size is not optimal (too small or too large)")
+    
+    # Check eye symmetry (basic check for straightness)
+    is_symmetric, symmetry_score = check_eye_symmetry(img_rgb, faces)
+    details['eye_symmetry_score'] = round(symmetry_score, 3)
+    
+    if not is_symmetric:
+        issues.append("❌ Face appears tilted or asymmetrical")
+    
+    # Check image quality (blur detection)
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    details['sharpness_score'] = round(laplacian_var, 2)
+    
+    if laplacian_var < 100:
+        issues.append("❌ Image appears blurry or out of focus")
+    
+    # Check brightness
+    mean_brightness = np.mean(gray)
+    details['brightness'] = round(mean_brightness, 2)
+    
+    if mean_brightness < 50:
+        issues.append("❌ Image is too dark")
+    elif mean_brightness > 200:
+        issues.append("❌ Image is too bright/overexposed")
     
     is_valid = len(issues) == 0
     return is_valid, issues, img_array, details
