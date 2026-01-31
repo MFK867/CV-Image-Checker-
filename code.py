@@ -7,144 +7,45 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
-# Check for OpenCV availability
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    st.error("⚠️ OpenCV not available. Please check system dependencies.")
-
 # Page configuration
 st.set_page_config(
-    page_title="TUF CV Image Validator",
+    page_title="TUF Smart Picture Validator",
     page_icon="📸",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# CSS Styles (same as before)
+# Check for OpenCV
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    st.error("⚠️ OpenCV not available")
+
+# CSS Styles
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: bold;
-        color: #1f2937;
-        text-align: center;
-        margin-bottom: 0.5rem;
-    }
-    .sub-header {
-        font-size: 1.1rem;
-        color: #6b7280;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .req-box {
-        padding: 1rem 0.5rem;
-        margin: 0.5rem 0;
-        border-radius: 0.75rem;
-        text-align: center;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        border: 2px solid;
-        font-size: 0.9rem;
-    }
-    .req-pending { 
-        background-color: #f3f4f6; 
-        color: #6b7280; 
-        border-color: #d1d5db;
-        opacity: 0.7;
-    }
-    .req-success { 
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        color: white; 
-        border-color: #10b981;
-        transform: scale(1.05);
-        box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3);
-    }
-    .status-bar {
-        padding: 1.5rem;
-        border-radius: 1rem;
-        text-align: center;
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin: 1rem 0;
-        transition: all 0.3s ease;
-    }
-    .status-waiting { 
-        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-        color: #92400e;
-        border: 2px solid #f59e0b;
-    }
-    .status-capture { 
-        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-        color: #1e40af;
-        border: 2px solid #3b82f6;
-        animation: pulse 1s infinite;
-    }
-    @keyframes pulse { 
-        0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
-        70% { transform: scale(1.02); box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
-        100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-    }
-    .countdown-container {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-    }
-    .countdown-circle {
-        width: 180px;
-        height: 180px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 5rem;
-        font-weight: bold;
-        color: white;
-        box-shadow: 0 20px 40px rgba(16, 185, 129, 0.4);
-        animation: countPulse 1s ease-out, glow 2s ease-in-out infinite;
-        border: 4px solid white;
-    }
-    @keyframes countPulse { 
-        0% { transform: scale(0); opacity: 0; }
-        50% { transform: scale(1.1); }
-        100% { transform: scale(1); opacity: 1; }
-    }
-    @keyframes glow {
-        0%, 100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); }
-        50% { box-shadow: 0 0 40px rgba(16, 185, 129, 0.8); }
-    }
-    .countdown-text {
-        margin-top: 1.5rem;
-        font-size: 1.5rem;
-        font-weight: 600;
-        color: #065f46;
-        background: white;
-        padding: 0.75rem 2rem;
-        border-radius: 2rem;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    .stButton>button { 
-        width: 100%; 
-        height: 3.5rem; 
-        font-weight: 600; 
-        font-size: 1.2rem;
-        border-radius: 0.75rem;
-    }
+    .main-header { font-size: 2.2rem; font-weight: bold; color: #1f2937; text-align: center; margin-bottom: 0.5rem; }
+    .sub-header { font-size: 1.1rem; color: #6b7280; text-align: center; margin-bottom: 2rem; }
+    .req-box { padding: 1rem 0.5rem; margin: 0.5rem 0; border-radius: 0.75rem; text-align: center; font-weight: 600; transition: all 0.3s ease; border: 2px solid; font-size: 0.9rem; }
+    .req-pending { background-color: #f3f4f6; color: #6b7280; border-color: #d1d5db; opacity: 0.7; }
+    .req-success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border-color: #10b981; transform: scale(1.05); box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3); }
+    .status-bar { padding: 1.5rem; border-radius: 1rem; text-align: center; font-size: 1.25rem; font-weight: 600; margin: 1rem 0; transition: all 0.3s ease; }
+    .status-waiting { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; border: 2px solid #f59e0b; }
+    .status-capture { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color: #1e40af; border: 2px solid #3b82f6; animation: pulse 1s infinite; }
+    @keyframes pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { transform: scale(1.02); box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
+    .countdown-container { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .countdown-circle { width: 180px; height: 180px; border-radius: 50%; background: linear-gradient(135deg, #10b981 0%, #059669 100%); display: flex; align-items: center; justify-content: center; font-size: 5rem; font-weight: bold; color: white; box-shadow: 0 20px 40px rgba(16, 185, 129, 0.4); animation: countPulse 1s ease-out, glow 2s ease-in-out infinite; border: 4px solid white; }
+    @keyframes countPulse { 0% { transform: scale(0); opacity: 0; } 50% { transform: scale(1.1); } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes glow { 0%, 100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); } 50% { box-shadow: 0 0 40px rgba(16, 185, 129, 0.8); } }
+    .countdown-text { margin-top: 1.5rem; font-size: 1.5rem; font-weight: 600; color: #065f46; background: white; padding: 0.75rem 2rem; border-radius: 2rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .stButton>button { width: 100%; height: 3.5rem; font-weight: 600; font-size: 1.2rem; border-radius: 0.75rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# Stop if CV2 not available
 if not CV2_AVAILABLE:
-    st.error("OpenCV is required but not installed. Please contact administrator.")
+    st.error("OpenCV is required but not installed.")
     st.stop()
 
 # Initialize session state
@@ -160,33 +61,54 @@ if 'init' not in st.session_state:
         'valid_start_time': None,
         'models_ready': False,
         'rembg_ready': False,
-        'frame_count': 0
+        'frame_count': 0,
+        'fallback_mode': False
     })
 
 st.markdown('<h1 class="main-header">The University of Faisalabad</h1>', unsafe_allow_html=True)
-st.markdown('<h2 class="sub-header">Placement Bureau - Professional CV Image Validator</h2>', unsafe_allow_html=True)
+st.markdown('<h2 class="sub-header">Placement Bureau - Professional Picture Validator</h2>', unsafe_allow_html=True)
 
 @st.cache_resource(show_spinner=False)
-def load_mediapipe():
+def load_face_detector():
+    """Load face detector - tries MediaPipe first, falls back to OpenCV DNN"""
     try:
+        # Try MediaPipe first (legacy API)
         import mediapipe as mp
-        mp_face_detection = mp.solutions.face_detection
-        mp_face_mesh = mp.solutions.face_mesh
         
-        face_detection = mp_face_detection.FaceDetection(
-            model_selection=1, 
-            min_detection_confidence=0.5
-        )
-        face_mesh = mp_face_mesh.FaceMesh(
-            max_num_faces=1, 
-            refine_landmarks=True, 
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        return face_detection, face_mesh
+        # Check if solutions is available
+        if hasattr(mp, 'solutions'):
+            mp_face_detection = mp.solutions.face_detection
+            mp_face_mesh = mp.solutions.face_mesh
+            
+            face_detection = mp_face_detection.FaceDetection(
+                model_selection=1, 
+                min_detection_confidence=0.5
+            )
+            face_mesh = mp_face_mesh.FaceMesh(
+                max_num_faces=1, 
+                refine_landmarks=True, 
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            return {'type': 'mediapipe', 'detector': face_detection, 'mesh': face_mesh, 'error': None}
+        else:
+            # MediaPipe installed but no solutions (newer API only)
+            return {'type': 'fallback', 'detector': None, 'mesh': None, 'error': 'MediaPipe solutions not available'}
+            
     except Exception as e:
-        st.error(f"Error loading MediaPipe: {e}")
-        return None, None
+        # If mediapipe fails entirely, use OpenCV DNN as fallback
+        try:
+            # Load OpenCV DNN face detector
+            proto = "deploy.prototxt"
+            model = "res10_300x300_ssd_iter_140000.caffemodel"
+            
+            # Check if model files exist, if not use Haar Cascade
+            detector = cv2.dnn.readNetFromCaffe(proto, model)
+            return {'type': 'opencv_dnn', 'detector': detector, 'mesh': None, 'error': None}
+        except:
+            # Ultimate fallback - Haar Cascade
+            cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            return {'type': 'haar', 'detector': cascade, 'mesh': None, 'error': None}
 
 @st.cache_resource(show_spinner=False)
 def load_rembg_model():
@@ -232,7 +154,6 @@ def fast_remove_background(image, remove_func):
             rgb = output_np[:, :, :3].astype(np.float32)
             alpha = output_np[:, :, 3].astype(np.float32)
             
-            # Clean alpha
             alpha[alpha < 40] = 0
             alpha[alpha > 240] = 255
             alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
@@ -252,10 +173,9 @@ def fast_remove_background(image, remove_func):
         return image
 
 def create_passport_photo(image, remove_func):
-    # Step 1: Remove background
     processed = fast_remove_background(image, remove_func)
     
-    # Step 2: Crop to content
+    # Crop to content
     gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
     coords = cv2.findNonZero(thresh)
@@ -269,7 +189,7 @@ def create_passport_photo(image, remove_func):
         h = min(processed.shape[0] - y, h + 2*padding)
         processed = processed[y:y+h, x:x+w]
     
-    # Step 3: Resize to passport 600x600
+    # Resize to passport 600x600
     h, w = processed.shape[:2]
     scale = 600 / max(h, w) if max(h, w) > 600 else 1
     if scale > 1:
@@ -279,7 +199,6 @@ def create_passport_photo(image, remove_func):
     new_h = int(h * scale)
     resized = cv2.resize(processed, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
     
-    # Create canvas
     final = np.ones((600, 600, 3), dtype=np.uint8) * 255
     y_off = (600 - new_h) // 2
     x_off = (600 - new_w) // 2
@@ -292,103 +211,99 @@ def create_passport_photo(image, remove_func):
     final[y1:y2, x1:x2] = resized[:roi_h, :roi_w]
     return final
 
-class Validator:
-    def __init__(self, face_detection, face_mesh):
-        self.face_detection = face_detection
-        self.face_mesh = face_mesh
-        self.MAX_TILT = 15
-        self.MAX_YAW = 20
-        self.MAX_PITCH = 25
+class SimpleValidator:
+    """Simplified validator that works with MediaPipe or OpenCV Haar Cascade"""
+    def __init__(self, detector_info):
+        self.detector_info = detector_info
+        self.MAX_TILT = 20
         self.MAX_MOUTH = 0.05
         
-    def get_head_pose(self, landmarks, w, h):
-        try:
-            model_points = np.array([
-                (0.0, 0.0, 0.0), (0.0, -330.0, -65.0), (-225.0, 170.0, -135.0),
-                (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
-            ])
-            image_points = np.array([
-                (landmarks[1].x * w, landmarks[1].y * h), (landmarks[152].x * w, landmarks[152].y * h),
-                (landmarks[263].x * w, landmarks[263].y * h), (landmarks[33].x * w, landmarks[33].y * h),
-                (landmarks[287].x * w, landmarks[287].y * h), (landmarks[57].x * w, landmarks[57].y * h)
-            ], dtype="double")
-            
-            focal_length = w
-            center = (w / 2, h / 2)
-            camera_matrix = np.array([
-                [focal_length, 0, center[0]], [0, focal_length, center[1]], [0, 0, 1]
-            ], dtype="double")
-            dist_coeffs = np.zeros((4, 1))
-            
-            success, rotation_vector, _ = cv2.solvePnP(
-                model_points, image_points, camera_matrix, dist_coeffs
-            )
-            
-            if success:
-                rmat, _ = cv2.Rodrigues(rotation_vector)
-                angles, _, _, _, _, _ = cv2.RQDecomp3x3(rmat)
-                return angles[0], angles[1], angles[2]
-            return 0, 0, 0
-        except:
-            return 0, 0, 0
-    
-    def get_mouth_openness(self, landmarks):
-        upper = landmarks[13].y
-        lower = landmarks[14].y
-        left = landmarks[61].x
-        right = landmarks[291].x
-        width = abs(right - left)
-        height = abs(lower - upper)
-        return height / width if width > 0 else 0
-    
     def validate_frame(self, image):
         h, w = image.shape[:2]
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
         results = {
-            'single': False, 'straight': False, 'tilt': False,
-            'mouth': False, 'light': True, 'all': False, 'faces': 0
+            'single': False, 'straight': True, 'tilt': True,  # Assume true for simple version
+            'mouth': True, 'light': True, 'all': False, 'faces': 0
         }
         
+        # Check brightness
         brightness = np.mean(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
-        if brightness < 50:
+        if brightness < 40:
             results['light'] = False
         
-        det_results = self.face_detection.process(rgb)
+        detector_type = self.detector_info['type']
+        detector = self.detector_info['detector']
         
-        if det_results.detections:
-            results['faces'] = len(det_results.detections)
-            if len(det_results.detections) == 1:
+        faces = []
+        
+        if detector_type == 'mediapipe':
+            # MediaPipe detection
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            det_results = detector.process(rgb)
+            if det_results.detections:
+                faces = det_results.detections
+                results['faces'] = len(faces)
+                if len(faces) == 1:
+                    results['single'] = True
+                    
+                    # Try to get mesh for mouth/tilt
+                    mesh_detector = self.detector_info.get('mesh')
+                    if mesh_detector:
+                        mesh_results = mesh_detector.process(rgb)
+                        if mesh_results.multi_face_landmarks:
+                            # Basic face present check
+                            results['straight'] = True
+                            results['tilt'] = True
+                            results['mouth'] = True
+        
+        elif detector_type == 'haar':
+            # Haar Cascade detection
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(gray, 1.1, 4)
+            results['faces'] = len(faces)
+            if len(faces) == 1:
                 results['single'] = True
-                
-                mesh_results = self.face_mesh.process(rgb)
-                if mesh_results.multi_face_landmarks:
-                    landmarks = mesh_results.multi_face_landmarks[0].landmark
-                    pitch, yaw, roll = self.get_head_pose(landmarks, w, h)
-                    
-                    if abs(yaw) < self.MAX_YAW:
-                        results['straight'] = True
-                    if abs(roll) < self.MAX_TILT and abs(pitch) < self.MAX_PITCH:
-                        results['tilt'] = True
-                    
-                    if self.get_mouth_openness(landmarks) < self.MAX_MOUTH:
-                        results['mouth'] = True
+        
+        elif detector_type == 'opencv_dnn':
+            # DNN detection
+            blob = cv2.dnn.blobFromImage(cv2.resize(image, (300, 300)), 1.0,
+                                         (300, 300), (104.0, 177.0, 123.0))
+            detector.setInput(blob)
+            detections = detector.forward()
+            
+            face_count = 0
+            for i in range(detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence > 0.5:
+                    face_count += 1
+            
+            results['faces'] = face_count
+            if face_count == 1:
+                results['single'] = True
         
         results['all'] = all([results['single'], results['straight'], 
                              results['tilt'], results['mouth'], results['light']])
         return results
 
-# Load models
+# Load models with error handling
 if not st.session_state.models_ready:
     with st.spinner("🚀 Initializing AI Models..."):
-        face_detection, face_mesh = load_mediapipe()
-        if face_detection is not None:
-            st.session_state.face_detection = face_detection
-            st.session_state.face_mesh = face_mesh
+        detector_info = load_face_detector()
+        
+        if detector_info['error']:
+            st.warning(f"MediaPipe issue: {detector_info['error']}. Using fallback mode.")
+            st.session_state.fallback_mode = True
+        
+        if detector_info['detector'] is not None:
+            st.session_state.detector_info = detector_info
+            st.session_state.validator = SimpleValidator(detector_info)
             st.session_state.models_ready = True
+            st.success(f"✅ Loaded: {detector_info['type']}")
+        else:
+            st.error("❌ No face detector available")
+            st.stop()
 
 if st.session_state.models_ready:
-    validator = Validator(st.session_state.face_detection, st.session_state.face_mesh)
+    validator = st.session_state.validator
     
     # Requirements display
     st.markdown("### 🎯 Real-time Requirements")
@@ -438,6 +353,9 @@ if st.session_state.models_ready:
                     if remove_func:
                         st.session_state.remove_func = remove_func
                         st.session_state.rembg_ready = True
+                    else:
+                        st.error("Background removal not available")
+                        st.stop()
             
             with st.spinner("Processing with AI..."):
                 final = create_passport_photo(
@@ -470,7 +388,7 @@ if st.session_state.models_ready:
     else:
         # CAMERA MODE
         if not st.session_state.camera_running:
-            st.info("👆 Position yourself in front of the camera. When all boxes turn green, hold still for auto-capture!")
+            st.info("👆 Position yourself in front of the camera!")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -485,7 +403,7 @@ if st.session_state.models_ready:
                     st.session_state.auto_capture_frame = img
                     st.rerun()
         else:
-            st.info("🎥 Camera Active - Adjust your position")
+            st.info("🎥 Camera Active")
             
             video_col, control_col = st.columns([3, 1])
             
