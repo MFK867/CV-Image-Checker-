@@ -1,9 +1,8 @@
 streamlit
 opencv-python-headless
-Pillow
 numpy
+Pillow
+mediapipe==0.10.9
+protobuf<4
 rembg
 onnxruntime
-mediapipe
-streamlit-webrtc
-aiortc
