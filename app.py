@@ -13,9 +13,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize MediaPipe Face Detection and Face Mesh
-mp_face_detection = mp.solutions.face_detection
-mp_face_mesh = mp.solutions.face_mesh
+# Initialize MediaPipe Face Detection and Face Mesh with caching
+@st.cache_resource
+def get_face_detection():
+    return mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.5)
+
+@st.cache_resource
+def get_face_mesh():
+    return mp.solutions.face_mesh.FaceMesh(
+        static_image_mode=True,
+        max_num_faces=1,
+        min_detection_confidence=0.5
+    )
 
 def check_eyes_open(face_landmarks):
     """Check if eyes are open using eye aspect ratio"""
@@ -83,51 +92,53 @@ def validate_cv_photo(image):
     details = {}
     
     # Face Detection
-    with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
-        results = face_detection.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
-        
-        if not results.detections:
-            issues.append("❌ No face detected in the image")
-            return False, issues, None, details
-        
-        if len(results.detections) > 1:
-            issues.append(f"❌ Multiple faces detected ({len(results.detections)}). Only one person should be in the photo")
-            return False, issues, None, details
+    face_detection = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.5)
+    results = face_detection.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    face_detection.close()
+    
+    if not results.detections:
+        issues.append("❌ No face detected in the image")
+        return False, issues, None, details
+    
+    if len(results.detections) > 1:
+        issues.append(f"❌ Multiple faces detected ({len(results.detections)}). Only one person should be in the photo")
+        return False, issues, None, details
     
     # Face Mesh for detailed analysis
-    with mp_face_mesh.FaceMesh(
+    face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
         min_detection_confidence=0.5
-    ) as face_mesh:
-        results = face_mesh.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    )
+    results = face_mesh.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    face_mesh.close()
+    
+    if results.multi_face_landmarks:
+        face_landmarks = results.multi_face_landmarks[0]
         
-        if results.multi_face_landmarks:
-            face_landmarks = results.multi_face_landmarks[0]
-            
-            # Check eyes
-            eyes_open, ear_value = check_eyes_open(face_landmarks)
-            details['eye_aspect_ratio'] = round(ear_value, 3)
-            if not eyes_open:
-                issues.append("❌ Eyes appear to be closed or partially closed")
-            
-            # Check mouth
-            mouth_closed, mouth_value = check_mouth_closed(face_landmarks)
-            details['mouth_opening'] = round(mouth_value, 3)
-            if not mouth_closed:
-                issues.append("❌ Mouth appears to be open")
-            
-            # Check alignment
-            is_aligned, is_straight, is_centered = check_face_alignment(
-                face_landmarks, img_rgb.shape[1], img_rgb.shape[0]
-            )
-            details['face_straight'] = is_straight
-            details['face_centered'] = is_centered
-            
-            if not is_straight:
-                issues.append("❌ Face is tilted - please keep your head straight")
-            if not is_centered:
-                issues.append("❌ Face is not centered in the frame")
+        # Check eyes
+        eyes_open, ear_value = check_eyes_open(face_landmarks)
+        details['eye_aspect_ratio'] = round(ear_value, 3)
+        if not eyes_open:
+            issues.append("❌ Eyes appear to be closed or partially closed")
+        
+        # Check mouth
+        mouth_closed, mouth_value = check_mouth_closed(face_landmarks)
+        details['mouth_opening'] = round(mouth_value, 3)
+        if not mouth_closed:
+            issues.append("❌ Mouth appears to be open")
+        
+        # Check alignment
+        is_aligned, is_straight, is_centered = check_face_alignment(
+            face_landmarks, img_rgb.shape[1], img_rgb.shape[0]
+        )
+        details['face_straight'] = is_straight
+        details['face_centered'] = is_centered
+        
+        if not is_straight:
+            issues.append("❌ Face is tilted - please keep your head straight")
+        if not is_centered:
+            issues.append("❌ Face is not centered in the frame")
     
     is_valid = len(issues) == 0
     return is_valid, issues, img_array, details
@@ -159,56 +170,58 @@ def provide_live_feedback(image):
     feedback = []
     ready_to_capture = True
     
-    with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
-        results = face_detection.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
-        
-        if not results.detections:
-            feedback.append("⚠️ No face detected - please position yourself in frame")
-            return feedback, False
-        
-        if len(results.detections) > 1:
-            feedback.append(f"⚠️ Multiple faces detected - ensure only you are in the frame")
-            return feedback, False
+    face_detection = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.5)
+    results = face_detection.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    face_detection.close()
     
-    with mp_face_mesh.FaceMesh(
+    if not results.detections:
+        feedback.append("⚠️ No face detected - please position yourself in frame")
+        return feedback, False
+    
+    if len(results.detections) > 1:
+        feedback.append(f"⚠️ Multiple faces detected - ensure only you are in the frame")
+        return feedback, False
+    
+    face_mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True,
         max_num_faces=1,
         min_detection_confidence=0.5
-    ) as face_mesh:
-        results = face_mesh.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    )
+    results = face_mesh.process(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+    face_mesh.close()
+    
+    if results.multi_face_landmarks:
+        face_landmarks = results.multi_face_landmarks[0]
         
-        if results.multi_face_landmarks:
-            face_landmarks = results.multi_face_landmarks[0]
+        eyes_open, _ = check_eyes_open(face_landmarks)
+        if not eyes_open:
+            feedback.append("👁️ Please open your eyes")
+            ready_to_capture = False
+        else:
+            feedback.append("✅ Eyes open")
+        
+        mouth_closed, _ = check_mouth_closed(face_landmarks)
+        if not mouth_closed:
+            feedback.append("👄 Please close your mouth")
+            ready_to_capture = False
+        else:
+            feedback.append("✅ Mouth closed")
+        
+        is_aligned, is_straight, is_centered = check_face_alignment(
+            face_landmarks, img_rgb.shape[1], img_rgb.shape[0]
+        )
+        
+        if not is_straight:
+            feedback.append("📐 Please straighten your head")
+            ready_to_capture = False
+        else:
+            feedback.append("✅ Head straight")
             
-            eyes_open, _ = check_eyes_open(face_landmarks)
-            if not eyes_open:
-                feedback.append("👁️ Please open your eyes")
-                ready_to_capture = False
-            else:
-                feedback.append("✅ Eyes open")
-            
-            mouth_closed, _ = check_mouth_closed(face_landmarks)
-            if not mouth_closed:
-                feedback.append("👄 Please close your mouth")
-                ready_to_capture = False
-            else:
-                feedback.append("✅ Mouth closed")
-            
-            is_aligned, is_straight, is_centered = check_face_alignment(
-                face_landmarks, img_rgb.shape[1], img_rgb.shape[0]
-            )
-            
-            if not is_straight:
-                feedback.append("📐 Please straighten your head")
-                ready_to_capture = False
-            else:
-                feedback.append("✅ Head straight")
-                
-            if not is_centered:
-                feedback.append("🎯 Please center your face")
-                ready_to_capture = False
-            else:
-                feedback.append("✅ Face centered")
+        if not is_centered:
+            feedback.append("🎯 Please center your face")
+            ready_to_capture = False
+        else:
+            feedback.append("✅ Face centered")
     
     if ready_to_capture:
         feedback.append("✨ **Perfect! You're ready to capture**")
@@ -289,7 +302,7 @@ with tab2:
     1. Click "Open Camera" below to activate your camera
     2. Position yourself in front of the camera
     3. Follow the real-time feedback below
-    4. When all checks are ✅, click the photo
+    4. When all checks are ✅, take the photo
     5. The background will automatically be changed to white
     """)
     
@@ -297,20 +310,24 @@ with tab2:
     if 'camera_active' not in st.session_state:
         st.session_state.camera_active = False
     
-    # Camera control button
-    if not st.session_state.camera_active:
-        if st.button("📷 Open Camera", type="primary", use_container_width=True):
+    # Camera control buttons
+    col_btn1, col_btn2 = st.columns([1, 1])
+    
+    with col_btn1:
+        if st.button("📷 Open Camera", type="primary", use_container_width=True, disabled=st.session_state.camera_active):
             st.session_state.camera_active = True
             st.rerun()
-    else:
-        if st.button("❌ Close Camera", type="secondary", use_container_width=True):
+    
+    with col_btn2:
+        if st.button("❌ Close Camera", type="secondary", use_container_width=True, disabled=not st.session_state.camera_active):
             st.session_state.camera_active = False
             st.rerun()
     
     # Camera input - only show when active
     camera_photo = None
     if st.session_state.camera_active:
-        camera_photo = st.camera_input("Take a photo", key="camera")
+        st.info("📸 Camera is active. Take a photo when ready!")
+        camera_photo = st.camera_input("", key="camera", label_visibility="collapsed")
     
     if camera_photo is not None:
         image = Image.open(camera_photo)
