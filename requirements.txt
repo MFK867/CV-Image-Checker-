@@ -1,7 +1,13 @@
-streamlit
+# Pin to older version that still has solutions API
+mediapipe==0.10.21
+
+# Install opencv-python-headless FIRST (before mediapipe)
+# This prevents mediapipe from forcing opencv-contrib-python
 opencv-python-headless
-mediapipe
-Pillow
-numpy<2.0.0
+
+# Other dependencies
+streamlit
+pillow
+numpy
 rembg
 onnxruntime
