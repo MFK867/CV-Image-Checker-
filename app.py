@@ -23,26 +23,24 @@ def load_cv2():
     import cv2
     return cv2
 
-# Initialize only when needed
-mp = None
-cv2 = None
+# Global variables for cached modules
+_mediapipe_module = None
+_cv2_module = None
 
 def get_mediapipe():
-    global mp
-    if mp is None:
-        mp = load_mediapipe()
-    return mp
+    global _mediapipe_module
+    if _mediapipe_module is None:
+        _mediapipe_module = load_mediapipe()
+    return _mediapipe_module
 
 def get_cv2():
-    global cv2
-    if cv2 is None:
-        cv2 = load_cv2()
-    return cv2
+    global _cv2_module
+    if _cv2_module is None:
+        _cv2_module = load_cv2()
+    return _cv2_module
 
 def check_eyes_open(face_landmarks):
     """Check if eyes are open using eye aspect ratio"""
-    mp_module = get_mediapipe()
-    
     left_eye = [face_landmarks.landmark[i] for i in [159, 145, 133, 33]]
     right_eye = [face_landmarks.landmark[i] for i in [386, 374, 362, 263]]
     
@@ -194,6 +192,8 @@ with tab1:
                 is_valid, issues, img_array, details = validate_cv_photo(image)
             except Exception as e:
                 st.error(f"Error processing image: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
                 st.stop()
         
         with col2:
@@ -268,6 +268,8 @@ with tab2:
                 is_valid, issues, img_array, details = validate_cv_photo(image)
             except Exception as e:
                 st.error(f"Error processing image: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
                 st.stop()
         
         # Show validation results
