@@ -1,5 +1,4 @@
 import streamlit as st
-import cv2
 import numpy as np
 from PIL import Image
 import io
@@ -8,15 +7,23 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
+# Check for OpenCV availability
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    st.error("⚠️ OpenCV not available. Please check system dependencies.")
+
 # Page configuration
 st.set_page_config(
-    page_title="TUF Smart Picture Validator",
+    page_title="TUF CV Image Validator",
     page_icon="📸",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Enhanced CSS with professional countdown
+# CSS Styles (same as before)
 st.markdown("""
 <style>
     .main-header {
@@ -69,11 +76,6 @@ st.markdown("""
         color: #92400e;
         border: 2px solid #f59e0b;
     }
-    .status-ready { 
-        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
-        color: #065f46;
-        border: 2px solid #10b981;
-    }
     .status-capture { 
         background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
         color: #1e40af;
@@ -85,8 +87,6 @@ st.markdown("""
         70% { transform: scale(1.02); box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
         100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
     }
-    
-    /* Professional Countdown Overlay */
     .countdown-container {
         position: fixed;
         top: 50%;
@@ -132,30 +132,6 @@ st.markdown("""
         border-radius: 2rem;
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
-    
-    /* Progress steps */
-    .progress-step {
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0.5rem;
-        background: #f3f4f6;
-        border-left: 4px solid #d1d5db;
-        transition: all 0.3s;
-    }
-    .progress-step.active {
-        background: #dbeafe;
-        border-left-color: #3b82f6;
-        animation: slideIn 0.3s ease;
-    }
-    .progress-step.complete {
-        background: #d1fae5;
-        border-left-color: #10b981;
-    }
-    @keyframes slideIn {
-        from { transform: translateX(-10px); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-    }
-    
     .stButton>button { 
         width: 100%; 
         height: 3.5rem; 
@@ -165,6 +141,11 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Stop if CV2 not available
+if not CV2_AVAILABLE:
+    st.error("OpenCV is required but not installed. Please contact administrator.")
+    st.stop()
 
 # Initialize session state
 if 'init' not in st.session_state:
@@ -183,7 +164,7 @@ if 'init' not in st.session_state:
     })
 
 st.markdown('<h1 class="main-header">The University of Faisalabad</h1>', unsafe_allow_html=True)
-st.markdown('<h2 class="sub-header">Placement Bureau - Professional Picture Validator</h2>', unsafe_allow_html=True)
+st.markdown('<h2 class="sub-header">Placement Bureau - Professional CV Image Validator</h2>', unsafe_allow_html=True)
 
 @st.cache_resource(show_spinner=False)
 def load_mediapipe():
@@ -212,7 +193,6 @@ def load_rembg_model():
     try:
         from rembg import remove
         import onnxruntime as ort
-        # Set ONNX to use CPU for faster loading
         ort.set_default_logger_severity(3)
         return remove
     except Exception as e:
@@ -220,14 +200,10 @@ def load_rembg_model():
         return None
 
 def fast_remove_background(image, remove_func):
-    """
-    Optimized background removal with resizing for speed
-    """
     try:
         original_h, original_w = image.shape[:2]
         
-        # Resize for faster processing (rembg is slow on large images)
-        # Process at max 1024px for speed, then resize back
+        # Resize for faster processing
         max_size = 1024
         if max(original_h, original_w) > max_size:
             scale = max_size / max(original_h, original_w)
@@ -259,8 +235,6 @@ def fast_remove_background(image, remove_func):
             # Clean alpha
             alpha[alpha < 40] = 0
             alpha[alpha > 240] = 255
-            
-            # Smooth edges
             alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
             alpha = alpha / 255.0
             alpha = alpha[:, :, None]
@@ -274,13 +248,10 @@ def fast_remove_background(image, remove_func):
             return cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
             
     except Exception as e:
-        print(f"Error: {e}")
+        st.error(f"Background removal failed: {e}")
         return image
 
 def create_passport_photo(image, remove_func):
-    """
-    Create professional passport photo with progress tracking
-    """
     # Step 1: Remove background
     processed = fast_remove_background(image, remove_func)
     
@@ -291,18 +262,17 @@ def create_passport_photo(image, remove_func):
     
     if coords is not None:
         x, y, w, h = cv2.boundingRect(coords)
-        padding = int(min(w, h) * 0.1)  # 10% padding
+        padding = int(min(w, h) * 0.1)
         x = max(0, x - padding)
         y = max(0, y - padding)
         w = min(processed.shape[1] - x, w + 2*padding)
         h = min(processed.shape[0] - y, h + 2*padding)
         processed = processed[y:y+h, x:x+w]
     
-    # Step 3: Resize to passport 600x600 with head ~70% of height
+    # Step 3: Resize to passport 600x600
     h, w = processed.shape[:2]
-    # Calculate to make face ~420px (70% of 600)
     scale = 600 / max(h, w) if max(h, w) > 600 else 1
-    if scale > 1:  # Don't upscale small images
+    if scale > 1:
         scale = 1
     
     new_w = int(w * scale)
@@ -314,7 +284,6 @@ def create_passport_photo(image, remove_func):
     y_off = (600 - new_h) // 2
     x_off = (600 - new_w) // 2
     
-    # Ensure bounds
     y1, y2 = max(0, y_off), min(600, y_off + new_h)
     x1, x2 = max(0, x_off), min(600, x_off + new_w)
     roi_h = y2 - y1
@@ -381,12 +350,10 @@ class Validator:
             'mouth': False, 'light': True, 'all': False, 'faces': 0
         }
         
-        # Check brightness
         brightness = np.mean(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
         if brightness < 50:
             results['light'] = False
         
-        # Face detection
         det_results = self.face_detection.process(rgb)
         
         if det_results.detections:
@@ -460,12 +427,11 @@ if st.session_state.models_ready:
         with col1:
             st.subheader("Original Capture")
             st.image(cv2.cvtColor(st.session_state.auto_capture_frame, cv2.COLOR_BGR2RGB), 
-                    use_container_width=True)  # Fixed deprecation
+                    use_container_width=True)
         
         with col2:
             st.subheader("Professional Format")
             
-            # Load rembg only once
             if not st.session_state.rembg_ready:
                 with st.spinner("Loading AI background removal..."):
                     remove_func = load_rembg_model()
@@ -473,21 +439,15 @@ if st.session_state.models_ready:
                         st.session_state.remove_func = remove_func
                         st.session_state.rembg_ready = True
             
-            # Process with progress tracking
-            progress_placeholder = st.empty()
-            steps = ["Removing background...", "Cropping to content...", "Resizing to passport format..."]
-            
-            # Use a simple spinner for the whole process since we can't easily stream steps
-            with st.spinner("Processing with AI... This may take 10-20 seconds"):
+            with st.spinner("Processing with AI..."):
                 final = create_passport_photo(
                     st.session_state.auto_capture_frame, 
                     st.session_state.remove_func
                 )
             
             final_rgb = cv2.cvtColor(final, cv2.COLOR_BGR2RGB)
-            st.image(final_rgb, use_container_width=True)  # Fixed deprecation
+            st.image(final_rgb, use_container_width=True)
             
-            # Download
             pil_img = Image.fromarray(final_rgb)
             buf = io.BytesIO()
             pil_img.save(buf, format='PNG', quality=95)
@@ -497,10 +457,10 @@ if st.session_state.models_ready:
                 data=buf.getvalue(),
                 file_name=f"TUF_Professional_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                 mime="image/png",
-                use_container_width=True  # Fixed deprecation
+                use_container_width=True
             )
         
-        if st.button("🔄 Take Another Photo", type="primary", use_container_width=True):  # Fixed deprecation
+        if st.button("🔄 Take Another Photo", type="primary", use_container_width=True):
             st.session_state.auto_capture_frame = None
             st.session_state.valid_start_time = None
             st.session_state.countdown_active = False
@@ -514,7 +474,7 @@ if st.session_state.models_ready:
             
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("📷 Start Camera", type="primary", use_container_width=True):  # Fixed deprecation
+                if st.button("📷 Start Camera", type="primary", use_container_width=True):
                     st.session_state.camera_running = True
                     st.rerun()
             with col2:
@@ -531,7 +491,7 @@ if st.session_state.models_ready:
             
             with control_col:
                 st.markdown("### Controls")
-                if st.button("⏹️ Stop", use_container_width=True):  # Fixed deprecation
+                if st.button("⏹️ Stop", use_container_width=True):
                     st.session_state.camera_running = False
                     st.session_state.valid_start_time = None
                     st.rerun()
@@ -541,7 +501,6 @@ if st.session_state.models_ready:
             
             with video_col:
                 FRAME_WINDOW = st.empty()
-                # Hidden placeholder for countdown HTML
                 COUNTDOWN_HTML = st.empty()
             
             cap = cv2.VideoCapture(0)
@@ -561,13 +520,11 @@ if st.session_state.models_ready:
                     if not ret:
                         break
                     
-                    frame = cv2.flip(frame, 1)  # Mirror
+                    frame = cv2.flip(frame, 1)
                     
-                    # Process every 3rd frame
                     if frame_counter % 3 == 0:
                         results = validator.validate_frame(frame)
                         
-                        # Update requirements
                         for key, icon, label in req_data:
                             css_class = "req-success" if results[key] else "req-pending"
                             check = "✓ " if results[key] else ""
@@ -576,7 +533,6 @@ if st.session_state.models_ready:
                                 unsafe_allow_html=True
                             )
                         
-                        # Auto-capture logic
                         if results['all']:
                             if valid_start is None:
                                 valid_start = time.time()
@@ -586,7 +542,6 @@ if st.session_state.models_ready:
                             remaining = int(max(0, 3 - elapsed))
                             
                             if remaining > 0:
-                                # Only update HTML when value changes to avoid flicker
                                 if remaining != last_countdown_val:
                                     last_countdown_val = remaining
                                     COUNTDOWN_HTML.markdown(f"""
@@ -602,12 +557,9 @@ if st.session_state.models_ready:
                                     unsafe_allow_html=True
                                 )
                                 
-                                # Draw subtle indicator on frame too
                                 h, w = frame.shape[:2]
                                 cv2.circle(frame, (w//2, h//2), 150, (0, 255, 0), 3)
-                                
                             else:
-                                # CAPTURE!
                                 COUNTDOWN_HTML.empty()
                                 st.session_state.auto_capture_frame = frame.copy()
                                 cap.release()
@@ -633,13 +585,14 @@ if st.session_state.models_ready:
                     
                     frame_counter += 1
                     
-                    # Draw face oval guide
                     h, w = frame.shape[:2]
                     cv2.ellipse(frame, (w//2, h//2), (w//4, h//3), 0, 0, 360, (0,255,255), 2)
                     
-                    FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)  # Fixed deprecation
-                    time.sleep(0.033)  # ~30fps
+                    FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
+                    time.sleep(0.033)
                     
             finally:
                 cap.release()
                 cv2.destroyAllWindows()
+else:
+    st.error("❌ Failed to initialize AI models")
